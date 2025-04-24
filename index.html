@@ -1,0 +1,121 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>SOS-Бот — Жест помощи</title>
+  <style>
+    body { font-family: sans-serif; text-align: center; padding: 20px; }
+    video, canvas { width: 300px; border: 2px solid #ccc; border-radius: 10px; }
+    #status, #serialStatus, #alert { font-size: 1.2em; margin-top: 10px; white-space: pre-line; }
+    button { padding: 10px 20px; font-size: 1em; margin-top: 10px; }
+    #alert { color: red; font-weight: bold; }
+  </style>
+</head>
+<body>
+  <h1>SOS-Бот — Помощь рядом</h1>
+
+  <div id="webcam"></div>
+  <div id="status">⏳ Загрузка модели...</div>
+  <div id="alert"></div>
+
+  <button onclick="connectToArduino()">🔌 Подключиться к Arduino</button>
+  <div id="serialStatus">Статус порта: не подключено</div>
+
+  <!-- Подключение TensorFlow.js и Teachable Machine -->
+  <script src="https://cdn.jsdelivr.net/npm/@tensorflow/tfjs@3.9.0"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@teachablemachine/image@0.8/dist/teachablemachine-image.min.js"></script>
+
+  <script>
+    const URL = "https://anara854.github.io/bot20-25/";
+    let model, webcam, maxPredictions;
+    let port, writer, reader;
+
+    async function init() {
+      const modelURL = URL + "model.json";
+      const metadataURL = URL + "metadata.json";
+      try {
+        model = await tmImage.load(modelURL, metadataURL);
+        maxPredictions = model.getTotalClasses();
+
+        webcam = new tmImage.Webcam(300, 300, true);
+        await webcam.setup();
+        await webcam.play();
+        document.getElementById("webcam").appendChild(webcam.canvas);
+        document.getElementById("status").textContent = "✅ Модель загружена, идёт распознавание...";
+        window.requestAnimationFrame(loop);
+      } catch (error) {
+        document.getElementById("status").textContent = "❌ Ошибка загрузки модели";
+        console.error("Ошибка загрузки модели:", error);
+      }
+    }
+
+    async function loop() {
+      webcam.update();
+      await predict();
+      window.requestAnimationFrame(loop);
+    }
+
+    async function predict() {
+      const prediction = await model.predict(webcam.canvas);
+      const topPrediction = prediction.reduce((max, p) => p.probability > max.probability ? p : max);
+      const confidence = (topPrediction.probability * 100).toFixed(1);
+      const className = topPrediction.className;
+
+      document.getElementById("status").textContent = `🔍 Класс: ${className} (${confidence}%)`;
+
+      if (className === "Класс 1" && topPrediction.probability > 0.95) {
+        document.getElementById("alert").textContent = "⚠️ Обнаружен Класс 1!";
+        sendToArduino("1\n");
+      } else {
+        document.getElementById("alert").textContent = "";
+      }
+    }
+
+    async function connectToArduino() {
+      try {
+        if (!port) {
+          port = await navigator.serial.requestPort();
+        }
+
+        if (!port.readable || !port.writable) {
+          await port.open({ baudRate: 9600 });
+        }
+
+        writer = port.writable.getWriter();
+        reader = port.readable.getReader();
+
+        document.getElementById("serialStatus").textContent = "✅ Порт подключен";
+        console.log("✅ Подключение к Arduino успешно");
+
+        readFromArduino();
+
+      } catch (err) {
+        document.getElementById("serialStatus").textContent = "❌ Ошибка подключения";
+        console.error("Ошибка подключения:", err);
+      }
+    }
+
+    async function sendToArduino(data) {
+      if (!writer) return;
+      await writer.write(new TextEncoder().encode(data));
+      console.log("📤 Отправлено на Arduino:", data);
+    }
+
+    async function readFromArduino() {
+      while (true) {
+        try {
+          const { value, done } = await reader.read();
+          if (done) break;
+          const text = new TextDecoder().decode(value);
+          console.log("📥 Ответ от Arduino:", text);
+        } catch (e) {
+          console.warn("Ошибка чтения:", e);
+          break;
+        }
+      }
+    }
+
+    init();
+  </script>
+</body>
+</html>
